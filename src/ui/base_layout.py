@@ -101,6 +101,23 @@ def style_base_layout():
                     transform :scale(1.05)
                 }
 
+                [data-testid="stCameraInput"] {
+                    border-radius: 1rem !important;
+                    overflow: hidden !important;
+                }
+
+                [data-testid="stCameraInput"] video {
+                    border-radius: 1rem !important;
+                    width: 100% !important;
+                    object-fit: cover !important;
+                }
+
+                [data-testid="stCameraInput"] button {
+                    width: 100% !important;
+                    border-radius: 0 0 1rem 1rem !important;
+                    margin-top: 0 !important;
+                }
+
         </style>
 
 
