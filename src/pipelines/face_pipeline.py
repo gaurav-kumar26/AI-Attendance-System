@@ -3,16 +3,21 @@
 import dlib
 import numpy as np
 import face_recognition_models
-from sklearn.svm import SVC
 import streamlit as st
 
 from src.database.db import get_all_students
 
+# Login: strict — avoid wrong account
+LOGIN_THRESHOLD = 0.45
+LOGIN_MIN_MARGIN = 0.08
+
+# Classroom photos: slightly looser, always pick closest match per face
+ATTENDANCE_THRESHOLD = 0.55
+
 
 @st.cache_resource
 def load_dlib_models():
-    detector = dlib.get_frontal_face_detector() 
-
+    detector = dlib.get_frontal_face_detector()
 
     sp = dlib.shape_predictor(
         face_recognition_models.pose_predictor_model_location()
@@ -24,84 +29,121 @@ def load_dlib_models():
 
     return detector, sp, facerec
 
-def get_face_embeddings(image_np):
-    detector, sp, facerec = load_dlib_models()
-    faces = detector(image_np, 1)
 
-    encodings= []
+def _parse_embedding(embedding):
+    if embedding is None:
+        return None
+    try:
+        arr = np.asarray(embedding, dtype=np.float64).flatten()
+    except (TypeError, ValueError):
+        return None
+    if arr.size != 128:
+        return None
+    return arr
 
-    for face in faces:
-        shape = sp(image_np, face)
-        face_descriptor = facerec.compute_face_descriptor(image_np, shape, 1) #128 embedding
 
-        encodings.append(np.array(face_descriptor))
-    return encodings
-
-@st.cache_resource
-def get_trained_model():
+def get_face_database():
+    """Load enrolled face embeddings from DB (always fresh)."""
     X = []
     y = []
 
+    for student in get_all_students():
+        emb = _parse_embedding(student.get("face_embedding"))
+        if emb is not None:
+            X.append(emb)
+            y.append(int(student["student_id"]))
 
-    student_db = get_all_students()
+    return X, y
 
-    if not student_db:
+
+def get_face_embeddings(image_np, upsample=1):
+    detector, sp, facerec = load_dlib_models()
+    faces = detector(image_np, upsample)
+
+    encodings = []
+
+    for face in faces:
+        shape = sp(image_np, face)
+        face_descriptor = facerec.compute_face_descriptor(image_np, shape, 1)
+        encodings.append(np.array(face_descriptor))
+    return encodings
+
+
+def _rank_distances(encoding, X, y):
+    return sorted(
+        [(int(y[i]), float(np.linalg.norm(X[i] - encoding))) for i in range(len(X))],
+        key=lambda item: item[1],
+    )
+
+
+def match_face_login(encoding, X, y):
+    """Strict match for student login (reject ambiguous faces)."""
+    if not X:
         return None
-    
-    for student in student_db:
-        embedding = student.get('face_embedding')
-        if embedding:
-            X.append(np.array(embedding))
-            y.append(student.get('student_id'))
 
-    if len(X) ==0:
-        return 0
-    
-    clf = SVC(kernel='linear', probability=True, class_weight='balanced')
+    distances = _rank_distances(encoding, X, y)
+    best_id, best_dist = distances[0]
 
-    try:
-        clf.fit(X, y)
-    except ValueError:
-        pass
+    if best_dist > LOGIN_THRESHOLD:
+        return None
 
-    return {'clf': clf, 'X':X, "y":y}
+    if len(distances) > 1:
+        second_dist = distances[1][1]
+        if (second_dist - best_dist) < LOGIN_MIN_MARGIN:
+            return None
+
+    return best_id
+
+
+def match_face_attendance(encoding, X, y):
+    """Match each face in a class photo to the closest enrolled student."""
+    if not X:
+        return None
+
+    distances = _rank_distances(encoding, X, y)
+    best_id, best_dist = distances[0]
+
+    if best_dist <= ATTENDANCE_THRESHOLD:
+        return best_id
+    return None
 
 
 def train_classifier():
     st.cache_resource.clear()
-    model_data = get_trained_model()
-    return bool(model_data)
+    return bool(get_face_database()[0])
 
-def predict_attendance(class_image_np):
-    encodings = get_face_embeddings(class_image_np)
 
+def predict_student_login(class_image_np):
+    """Single-user login scan."""
+    encodings = get_face_embeddings(class_image_np, upsample=1)
     detected_student = {}
+    X, y = get_face_database()
+    all_students = sorted(set(y))
 
-
-    model_data = get_trained_model()
-
-    if not model_data:
-        return detected_student, [], len(encodings)
-    
-    clf = model_data['clf']
-    X_train = model_data['X']
-    y_train = model_data['y']
-
-    all_students = sorted(list(set(y_train)))
+    if not X:
+        return detected_student, all_students, len(encodings)
 
     for encoding in encodings:
-        if len(all_students)>= 2:
-            predicted_id= int(clf.predict([encoding])[0])
-        else:
-            predicted_id = int(all_students[0])
+        student_id = match_face_login(encoding, X, y)
+        if student_id is not None:
+            detected_student[student_id] = True
 
-        student_embedding = X_train[y_train.index(predicted_id)]
-
-        best_match_score = np.linalg.norm(student_embedding - encoding)
-
-        resemblance_threshold = 0.6
-
-        if best_match_score <= resemblance_threshold:
-            detected_student[predicted_id] = True
     return detected_student, all_students, len(encodings)
 
+
+def predict_attendance(class_image_np):
+    """Scan a classroom photo — detect every enrolled face present."""
+    encodings = get_face_embeddings(class_image_np, upsample=2)
+    detected_student = {}
+    X, y = get_face_database()
+    all_students = sorted(set(y))
+
+    if not X:
+        return detected_student, all_students, len(encodings)
+
+    for encoding in encodings:
+        student_id = match_face_attendance(encoding, X, y)
+        if student_id is not None:
+            detected_student[student_id] = True
+
+    return detected_student, all_students, len(encodings)

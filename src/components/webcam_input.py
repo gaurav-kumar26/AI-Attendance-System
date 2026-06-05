@@ -21,6 +21,10 @@ def clear_face_photo(key):
     st.session_state.pop(f"{key}_register", None)
 
 
+def reset_student_face_login():
+    clear_face_photo("student_face_login")
+
+
 def get_stored_face_photo(key):
     storage_key = _storage_key(key)
     if storage_key in st.session_state:
@@ -61,6 +65,7 @@ def face_photo_input(label="Position your face in the center", key="face_photo",
         if camera_photo is not None:
             st.session_state[storage_key] = camera_photo.getvalue()
             st.session_state.pop(f"{key}_processed", None)
+            st.session_state.pop(f"{key}_register", None)
             st.rerun()
 
     return None

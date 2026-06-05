@@ -1,6 +1,12 @@
 import streamlit as st
 
-from src.pipelines.voice_pipeline import process_bulk_audio
+from src.pipelines.voice_pipeline import (
+    process_bulk_audio,
+    classify_voice_presence,
+    VOICE_MATCH_THRESHOLD,
+    VOICE_RELATIVE_MARGIN,
+    has_valid_voice_profile,
+)
 
 from src.database.config import supabase
 
@@ -27,9 +33,32 @@ def voice_attendance_dialog(selected_subject_id):
                 st.warning('No students enrolled in this course')
                 return
             candidates_dict = {
-                s['students']['student_id'] : s['students']['voice_embedding'] 
-                for s in enrolled_students if s['students'].get('voice_embedding')
+                int(s['students']['student_id']): s['students']['voice_embedding']
+                for s in enrolled_students
+                if s['students'].get('voice_embedding')
             }
+
+            missing_voice = [
+                s['students']['name']
+                for s in enrolled_students
+                if not s['students'].get('voice_embedding')
+            ]
+            invalid_voice = [
+                s['students']['name']
+                for s in enrolled_students
+                if s['students'].get('voice_embedding')
+                and not has_valid_voice_profile(s['students']['voice_embedding'])
+            ]
+            if missing_voice:
+                st.warning(
+                    "No voice profile for: "
+                    + ", ".join(missing_voice)
+                    + ". Re-register with voice enrollment."
+                )
+            if invalid_voice:
+                st.warning(
+                    "Invalid voice profile (re-record): " + ", ".join(invalid_voice)
+                )
 
             if not candidates_dict:
                 st.error('No enrolled students have voice profiles registerd')
@@ -37,23 +66,33 @@ def voice_attendance_dialog(selected_subject_id):
             
             audio_bytes = audio_data.read()
 
-            detected_scores = process_bulk_audio(audio_bytes, candidates_dict)
+            student_scores = process_bulk_audio(audio_bytes, candidates_dict)
+            presence = classify_voice_presence(student_scores)
 
-            results, attendance_to_log  = [], []
+            results, attendance_to_log = [], []
 
             current_timestamp = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
-
+            max_score = max(student_scores.values()) if student_scores else 0.0
+            cutoff = max(VOICE_MATCH_THRESHOLD, max_score - VOICE_RELATIVE_MARGIN)
 
             for node in enrolled_students:
                 student = node['students']
-                score  = detected_scores.get(student['student_id'], 0.0)
-                is_present= bool(score>0)
+                sid = int(student['student_id'])
+                score = float(student_scores.get(sid, 0.0))
+                is_present = presence.get(sid, False)
+
+                if is_present:
+                    source = f"{score:.3f}"
+                elif score < VOICE_MATCH_THRESHOLD:
+                    source = f"{score:.3f} (need ≥{VOICE_MATCH_THRESHOLD})"
+                else:
+                    source = f"{score:.3f} (need ≥{cutoff:.3f}, top {max_score:.3f})"
 
                 results.append({
                     "Name": student['name'],
                     "ID": student['student_id'],
-                    "Source": score if is_present else "-",
-                    "Status": "✅ Present" if is_present else "❌ Absent"
+                    "Source": source,
+                    "Status": "✅ Present" if is_present else "❌ Absent",
                 })
 
                 attendance_to_log.append({

@@ -2,6 +2,7 @@ import streamlit as st
 from src.components.header import header_home
 from src.components.footer import footer_home
 from src.ui.base_layout import style_base_layout, style_background_home
+from src.components.webcam_input import reset_student_face_login
 
 def home_screen():
 
@@ -17,6 +18,7 @@ def home_screen():
         st.header("I'm Student")
         st.image("https://i.ibb.co/844D9Lrt/mascot-student.png", width=120)
         if st.button('Student Portal', type='primary', icon=':material/arrow_outward:', icon_position='right'):
+            reset_student_face_login()
             st.session_state['login_type']='student'
             st.rerun()
 

@@ -6,12 +6,12 @@ from src.components.header import header_dashboard
 from src.components.footer import footer_dashboard
 from PIL import Image
 import numpy as np
-from src.pipelines.face_pipeline import predict_attendance, get_face_embeddings, train_classifier
+from src.pipelines.face_pipeline import predict_student_login, get_face_embeddings, train_classifier
 from src.pipelines.voice_pipeline import get_voice_embedding
 from src.database.db import get_all_students, create_student, get_student_subjects, get_student_attendance, unenroll_student_to_subject
 import time
 
-from src.components.webcam_input import face_photo_input, clear_face_photo, get_stored_face_photo
+from src.components.webcam_input import face_photo_input, clear_face_photo, get_stored_face_photo, reset_student_face_login
 from src.components.dialog_enroll import enroll_dialog
 from src.components.subject_card import subject_card
 
@@ -25,7 +25,8 @@ def student_dashboard():
         st.subheader(f"""Welcome, {student_data['name']} """)
         if st.button("Logout", type='secondary', key='loginbackbtn', shortcut="control+backspace"):
             st.session_state['is_logged_in'] = False
-            del st.session_state.student_data 
+            del st.session_state.student_data
+            reset_student_face_login()
             st.rerun()
 
 
@@ -105,6 +106,7 @@ def student_screen():
     with c2:
         if st.button("Go back to Home", type='secondary', key='loginbackbtn', shortcut="control+backspace"):
             st.session_state['login_type'] = None
+            reset_student_face_login()
             st.rerun()
 
     st.header('Login using FaceID', text_alignment='center')
@@ -125,12 +127,12 @@ def student_screen():
             show_camera=True,
         ) or photo_source
 
-    if photo_source and not st.session_state.get(processed_key):
+    if photo_source and not st.session_state.get(processed_key) and not st.session_state.get(register_key):
         st.session_state[processed_key] = True
         img = np.array(Image.open(photo_source))
 
         with st.spinner('AI is scanning..'):
-            detected, all_ids, num_faces = predict_attendance(img)
+            detected, all_ids, num_faces = predict_student_login(img)
 
             if num_faces == 0:
                 st.warning('Face not found! Try again with better lighting.')
@@ -142,13 +144,15 @@ def student_screen():
                 st.session_state.pop(processed_key, None)
             else:
                 if detected:
-                    student_id = list(detected.keys())[0]
+                    student_id = int(list(detected.keys())[0])
                     all_students = get_all_students()
-                    student = next((s for s in all_students if s['student_id'] == student_id), None)
+                    student = next(
+                        (s for s in all_students if int(s['student_id']) == student_id),
+                        None,
+                    )
 
                     if student:
-                        clear_face_photo(login_key)
-                        st.session_state.pop(processed_key, None)
+                        reset_student_face_login()
                         st.session_state.is_logged_in = True
                         st.session_state.user_role = 'student'
                         st.session_state.student_data = student
@@ -199,8 +203,7 @@ def student_screen():
 
                             if response_data:
                                 train_classifier()
-                                clear_face_photo(login_key)
-                                st.session_state.pop(processed_key, None)
+                                reset_student_face_login()
                                 st.session_state.is_logged_in = True
                                 st.session_state.user_role = 'student'
                                 st.session_state.student_data = response_data[0]
